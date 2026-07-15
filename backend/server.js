@@ -14,8 +14,6 @@ const port = process.env.PORT || 4000
 connectDB()
 connectCloudinary()
 
-console.log("Backend deployed by GitHub Actions!");
-
 // middlewares
 app.use(express.json())
 app.use(cors())
