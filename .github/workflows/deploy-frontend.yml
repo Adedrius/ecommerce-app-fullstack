@@ -34,7 +34,7 @@ jobs:
 
       - name: Build frontend
         env:
-          VITE_BACKEND_URL: https://d3da9y7horw4rv.cloudfront.net
+          VITE_BACKEND_URL: https://adedrius.dev
         run: npm run build
 
       - name: Configure AWS credentials
