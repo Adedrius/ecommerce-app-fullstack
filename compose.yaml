@@ -11,6 +11,14 @@ services:
 
     restart: unless-stopped
 
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: us-east-2
+        awslogs-group: /ecommerce/backend/container
+        awslogs-stream: ecommerce-backend
+        awslogs-create-group: "true"
+
     healthcheck:
       test:
         [
