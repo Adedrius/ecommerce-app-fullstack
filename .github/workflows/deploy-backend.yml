@@ -1,4 +1,4 @@
-name: Deploy Backend to EC2
+name: Build and Deploy Backend Container
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "backend/**"
+      - "compose.yaml"
       - ".github/workflows/deploy-backend.yml"
 
   workflow_dispatch:
@@ -15,47 +16,88 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
-      - name: Configure SSH key
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push backend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
+            ./backend
+
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+      - name: Configure SSH
         shell: bash
         env:
           SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
         run: |
-          mkdir -p ~/.ssh
+          install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/ec2_key.pem
           chmod 600 ~/.ssh/ec2_key.pem
-          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -T 15 -H "${{ secrets.EC2_HOST }}" \
+            2>/dev/null >> ~/.ssh/known_hosts
 
-      - name: Deploy backend
+      - name: Deploy container to EC2
         shell: bash
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
         run: |
           ssh \
             -i ~/.ssh/ec2_key.pem \
             -o IdentitiesOnly=yes \
-            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" <<'EOF'
-              set -e
-
-              export NVM_DIR="$HOME/.nvm"
-              source "$NVM_DIR/nvm.sh"
-              nvm use 22
+            "$EC2_USER@$EC2_HOST" \
+            "ECR_REGISTRY='$ECR_REGISTRY' ECR_REPOSITORY='$ECR_REPOSITORY' bash -s" <<'EOF'
+              set -euo pipefail
 
               cd "$HOME/ecommerce-app-fullstack"
 
               git fetch origin main
               git reset --hard origin/main
 
-              cd backend
-              npm ci --omit=dev
+              aws ecr get-login-password --region us-east-2 |
+                docker login \
+                  --username AWS \
+                  --password-stdin "$ECR_REGISTRY"
 
-              pm2 restart ecommerce-backend --update-env
-              pm2 save
+              export ECR_IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:latest"
 
-              sleep 3
-              curl --fail --silent http://127.0.0.1:4000/api/product/list > /dev/null
+              docker compose pull backend
+              docker compose up -d --no-build backend
 
-              echo "Backend deployment successful."
+              sleep 8
+              docker compose ps
+
+              curl --fail --silent \
+                http://127.0.0.1:4000/api/product/list \
+                > /dev/null
+
+              docker image prune -f
+
+              echo "Docker backend deployment completed successfully."
           EOF

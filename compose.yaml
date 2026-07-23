@@ -1,10 +1,6 @@
 services:
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-
-    image: ecommerce-backend:latest
+    image: ${ECR_IMAGE}
     container_name: ecommerce-backend
 
     env_file:
